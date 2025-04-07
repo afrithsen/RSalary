@@ -1,1 +1,2 @@
-# RSalary
+# R Salary Project
+For this project, I was tasked with preparing an analysis of data science slaries to help the CEO of a fictional company understand current trends and make informed decisions on compensation and hiring. I worked with a dataset containing salary information across various industries and locations. Using R, I cleaned and transformed the data, identifying key variables such as experience, job title, location, adn education level. I then explored correlations and relationships between these factors and salary. To summarize my findings, I created visualizations using ggplot2 and presented the results in a concise presentation aimed at supporting strategic decision-making.
