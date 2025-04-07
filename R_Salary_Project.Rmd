@@ -1,0 +1,494 @@
+---
+title: "Competitive Data Science Salaries"
+author: "Amanda Frithsen"
+output:
+  pdf_document: default
+  html_notebook: default
+editor_options:
+  chunk_output_type: inline
+---
+
+Proposed Question:
+Your CEO has decided that the company needs a full-time scientist, and possibly a team of them in the future.  She thinks she needs someone who can help drive data science within the entire organization and could potentially lead a team in the future.  She understands that data scientist salaries vary widely across the world and is unsure what to pay them.  To complicate matters, salaries are going up due to the great recession and the market is highly competitive.  Your CEO has asked you to prepare an analysis on data science salaries and provide them with a range to be competitive and get top talent. The position can work offshore, but the CEO would like to know what the difference is for a person working in the United States.  Your company is currently a small company but is expanding rapidly.
+
+Alternative ways to ask proposed question:
+* What is a competitive data scientist salary range for the company to offer?
+* How have salaries gone up due to recession in recent years?
+* How do data scientist salaries vary across the world?  
+* How do competitive data scientist salaries in the US differ from elsewhere in the world?
+* What is a typical, competitive salary for a top-talented data scientist?
+  - How should we consider other factors - remote, company size, experience_level, job title?  Could these factors be used as negotiation points for salary?
+* What salary is "top talent" being offered?  What job titles would you look for on a resume to ensure "top talent"?
+
+```{r}
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(tidyverse)
+```
+
+
+```{r}
+# Load data into data frame
+library(readr)
+salaries <- read_csv("r project data.csv")
+
+# examine data frame
+head(salaries)
+tail(salaries)
+
+str(salaries)
+
+summary(salaries)
+
+colnames(salaries)
+
+
+```
+Notes from examination of data frame:
+* 607 observations, 12 variables
+* 7 character variables: 
+  experience_level, employment_type, job_title, salary_currency, 
+  employee_residence, company_location, company_size
+  5 numeric (double) variables:
+  ...1, work_year, salary, salary_in_usd, remote_ratio
+* ...1 column appears to be identification number for each employee, starting
+at 0 and ending at 606
+  - rename this column
+  - start counting at 1
+* work_years appear to only include 2020, 2021, 2022 (could be changed to factor)
+* experience_level, employment_type, salary_currency, company_size, remote_ratio
+could be possibly changed to factors
+* IQR of salaries_in_usd seems reasonable  (62726 to 150000);
+potential for outliers on either side of data given values of min (2859) and
+max (600000)
+* employee_residence and company_location provide the ISO country codes
+
+```{r}
+# check for NA or missing values
+sum(is.na(salaries))
+```
+Based on the sum of the NA values in the salaries data frame, there are no NA values.
+
+```{r}
+# rename first column
+colnames(salaries)[colnames(salaries) == "...1"] <- "ID_number"
+colnames(salaries)
+
+# change ID numbers to go from 1 to 607
+salaries$ID_number <- salaries$ID_number + 1
+
+# check that the values now go from 1 to 607
+min(salaries$ID_number)
+max(salaries$ID_number)
+```
+
+```{r}
+# change variables to factors
+salaries <- salaries %>% 
+  mutate(work_year = as.factor(work_year)) %>% 
+  mutate(experience_level = 
+           factor(experience_level, levels = c("EN", "MI", "SE", "EX"), ordered = TRUE)) %>%
+  mutate(employment_type = as.factor(employment_type)) %>% 
+  mutate(salary_currency = as.factor(salary_currency)) %>% 
+  mutate(company_size = factor(company_size, levels = c("S", "M", "L"), ordered = TRUE)) %>%
+  mutate(remote_ratio = as.factor(remote_ratio)) %>% 
+  mutate(company_location = as.factor(company_location))
+
+str(salaries)
+```
+Additional thoughts about variables...
+* work_year could provide insight about how salaries are changing in recent years
+(histogram of salaries faceted by work_year could be a good way to see this)
+* Is there a relationship between job title and work_experience?  employment_type? salary?
+* How do work_experience and employment_type impact salary?
+Perhaps look at summary tables to compare these variables
+* salary, salary_currency, and salary_in_usd all related; given our company is in the us, most helpful to consider salary_in_usd
+* interested to see if remote_ratio impacts salary...could ability to work remotely be a "perk" to offset salary? consider looking at box plots faceted by remote_ratio
+* how do salaries vary based on location?  look at company_location...use world map to visualize
+* how does company_size impact other variables (salary, experience_level, employment_type, etc.)?  look at the company_size of more experienced employees perhaps by using bar chart
+
+First, I would like to examine salaries during each value of work_year (2020, 2021, 2022), to see how significant the change is over the course of the three years.
+```{r}
+# Create a histogram of the salaries faceted by work year
+ggplot(salaries,
+       aes(x = salary_in_usd))+
+  geom_histogram(binwidth = 50000, fill = "Tomato", color = "Chocolate 3") +
+  # after experimenting with different values of binwidth, $50,000 seemed to show the most detail without having an excessive number of bins
+  theme_bw()+
+  facet_grid(~work_year)
+
+# upon examination, the histogram appears to show that 2022 has the most data values
+salaries %>% count(work_year)
+
+```
+All three years show data that is unimodal and right skewed.  The center of the data does appear to increase over the three years.  After looking at the counts and noticing how much smaller the sample space from 2020 is compared to the other two years (with only 72 observations), it would be more helpful to look at a plot comparing the relative frequencies of the values.
+
+```{r}
+# Create a relative frequency histogram of the salaries faceted by work year
+ggplot(salaries,
+       aes(x = salary_in_usd))+
+  geom_histogram(aes(y = ..count../sum(..count..)), binwidth = 50000, fill = "Tomato", color = "Chocolate 3") +
+  theme_bw()+
+  facet_grid(~work_year)
+```
+When trying to make a relative frequency histogram, I hit a wall when the relative frequencies were calculated using the overall total (607) instead of the total for each facet.  The best way I could find to rectify this was to group the data by year and bin in order to calculate the percents and then create a bar chart.
+```{r}
+# find the number of bins
+# round used to ensure 23.88..rounded up to the nearest whole number
+number_bins <- round((max(salaries$salary_in_usd) - min(salaries$salary_in_usd))/25000, digits = 0)
+number_bins
+
+min(salaries$salary_in_usd)
+max(salaries$salary_in_usd)
+
+salaries_by_year <- salaries %>% 
+  # group to find the counts per year
+  group_by(work_year) %>% 
+  mutate(count_by_year = n()) %>% 
+  ungroup()
+
+head(salaries_by_year)
+
+salaries_by_year <- salaries_by_year %>% 
+  # count number of observations within each bin
+  group_by(work_year, count_by_year, bin = cut(salary_in_usd, seq(0, 600000, by = 50000))) %>% 
+  # find the number of observations in each bin
+  summarize(count_salaries = n()) %>% 
+  # percent of observations in each bin
+  mutate(percent = count_salaries/count_by_year *100)
+
+unique(salaries_by_year$bin)
+# vector of labels for x-axis to make values readable
+x_labels <- c("(0,5e+04]" = "0-50", 
+              "(5e+04,1e+05]" = "50-100",
+              "(1e+05,1.5e+05]" = "100-150",
+              "(1.5e+05,2e+05]" = "150-200",
+              "(2e+05,2.5e+05]" = "201-250",
+              "(2.5e+05,3e+05]" = "250-300",
+              "(3e+05,3.5e+05]" = "300-350",
+              "(3.5e+05,4e+05]" = "350-400",
+              "(4e+05,4.5e+05]" = "400-450",
+              "(4.5e+05,5e+05]" = "450-500",
+              "(5e+05,5.5e+05]" = "500-550",
+              "(5.5e+05,6e+05]" = "550-600")
+
+# create bar chart using percents calculated with in each year
+ggplot(salaries_by_year,
+       aes(x = bin, y = percent, fill = work_year))+
+  geom_col(color = 'Dim Gray')+
+  facet_wrap(~work_year, ncol = 1) +
+  theme_bw() + 
+  scale_fill_manual(values = c("2020" = "Slate Blue", 
+                               "2021" = "Light Sea Green", 
+                               "2022" = "Lime Green")) +
+  scale_x_discrete(labels = x_labels) +
+  labs(title = 'Data Science Salaries Over Time',
+         x = "Salary \n (in thousands of dollars)",
+         y = "Percent of Employees \n (in given year)") +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5))
+
+```
+After looking at the graphical representations, I would also like to look at some summary statistics within each year.
+```{r}
+# because I want to preserve the data frame created previously, I am going to use a new data frame to break down the salaries by year and look at the quartiles (since the data is skewed)
+salaries_by_year_2 <- salaries %>% 
+  group_by(work_year) %>% 
+  summarize(Q1_salary_in_usd_by_year = quantile(salary_in_usd, 0.25), 
+            median_salary_in_usd_by_year = median(salary_in_usd),
+            Q3_salary_in_usd_by_year = quantile(salary_in_usd, 0.75))
+salaries_by_year_2
+```
+
+Next, I would like to examine average salaries compared to job_title, experience_level and employment_type.  I will use summary tables to look at the mean and median.
+```{r}
+# average salary by job title
+salaries_by_job_title <- salaries %>% 
+  group_by(job_title) %>% 
+  summarize(mean_salary_in_usd = mean(salary_in_usd), 
+            median_salary_in_usd = median(salary_in_usd))
+salaries_by_job_title
+
+# filter to identify the job titles that reported the maximum and minimum salary
+# I looked at both mean and median to ensure they were the same
+filter(salaries_by_job_title, salaries_by_job_title$mean_salary_in_usd == max(salaries_by_job_title$mean_salary_in_usd))
+filter(salaries_by_job_title, salaries_by_job_title$median_salary_in_usd == max(salaries_by_job_title$median_salary_in_usd))
+
+filter(salaries_by_job_title, salaries_by_job_title$mean_salary_in_usd == min(salaries_by_job_title$mean_salary_in_usd))
+filter(salaries_by_job_title, salaries_by_job_title$median_salary_in_usd == min(salaries_by_job_title$median_salary_in_usd))
+
+# sort by median salary and create a table with the job titles that reported the top 3 salaries and  create a table with the job titles that reported the bottom 3 salaries
+# I thought looking at these jobs with descriptions may give an idea of the skills the company is "buying" by paying a data science employee more
+top_bottom_job_salaries <- arrange(salaries_by_job_title, median_salary_in_usd)
+
+top_bottom_job_salaries <- top_bottom_job_salaries[c(1:3, 48:50),]
+top_bottom_job_salaries
+
+```
+I wonder how much data each of these average salaries is based on?  
+Which data science jobs occur the most in our data set?
+How does experience vary depending on job title?
+
+```{r}
+# average salary by experience level
+salaries_by_experience_level <- salaries %>% 
+  group_by(experience_level) %>% 
+  summarize(mean_salary_in_usd = mean(salary_in_usd), 
+            median_salary_in_usd = median(salary_in_usd))
+salaries_by_experience_level
+
+# After examining the differences in the mean and median salaries based on experience level, I would like to look more at the quartiles (including median) since they will be less impacted but extreme values than the mean
+
+salaries_by_experience_level <- salaries %>% 
+  group_by(experience_level) %>% 
+  summarize(Q1_salary_in_usd = quantile(salary_in_usd, 0.25), 
+            median_salary_in_usd = median(salary_in_usd),
+            Q3_salary_in_usd = quantile(salary_in_usd, 0.75))
+salaries_by_experience_level
+
+```
+```{r}
+# average salary by employment type
+
+salaries_by_employment_type <- salaries %>% 
+  group_by(employment_type) %>% 
+  summarize(mean_salary_in_usd = mean(salary_in_usd), 
+            median_salary_in_usd = median(salary_in_usd))
+salaries_by_employment_type
+```
+
+```{r}
+# experience within each job title
+job_title_by_experience_level <- salaries %>% 
+  group_by(job_title, experience_level) %>% 
+  summarize(count = n()) 
+job_title_by_experience_level
+
+job_title_by_experience <- filter(job_title_by_experience_level, count > 1)
+
+ggplot(job_title_by_experience_level, aes(x = experience_level, y = count))+
+  geom_col() +
+  facet_wrap(~job_title, ncol = 8)
+```
+```{r}
+# employment type within each job title
+job_title_by_employment_type <- salaries %>% 
+  group_by(job_title, employment_type) %>% 
+  summarize(count = n())
+job_title_by_employment_type
+
+ggplot(job_title_by_employment_type, aes(x = employment_type, y = count))+
+  geom_col() +
+  facet_wrap(~job_title, ncol = 8)
+# this plot is a mess and difficult to read
+# I am interested in seeing the job titles that appear the most in this data set
+
+job_title_by_employment_type <- arrange(job_title_by_employment_type, desc(count))
+head(job_title_by_employment_type, 5)
+```
+
+The box plots below are created to look at the remote ratio versus salary.
+```{r}
+ggplot(salaries, aes(x = remote_ratio, y = salary_in_usd)) +
+  geom_boxplot()
+```
+The shape of the three box plots was surprising to me.  The 0% remote and 100% remote are almost identical, with 100% remote being slightly higher.
+
+I was really excited to go through the article about maps in R.  After experimenting with mapping in R, I thought it would be cool to make a color coded with map based on salary amounts in order to begin by comparing salaries in the United States to salaries elsewhere.
+```{r}
+# look at the unique values in company_location in alphabetical order
+levels(unique(salaries$company_location))
+
+# curious to see how many observations there are in each company_location
+company_locations_count <- salaries %>% 
+  group_by(company_location) %>% 
+  summarize(count = n())
+company_locations_count
+arrange(company_locations_count, count)
+# the majority of data observations is from the United States (355); other countries with more than 5 observations are mostly in Western European countries
+
+# create a data frame with locations of each country that appear in "company_location"
+# start by setting up a data frame with company locations as a column
+location_coords <- data.frame(company_location = unique(salaries$company_location))
+
+# import csv file with latitude and longitude values for each country
+country_locations <- read.csv("country_locations.csv")
+
+# left join location_coords with country_locations to include latitude and longitude for each of the countries included in the salaries data frame
+
+location_coords <- left_join(location_coords, country_locations, 
+                             join_by("company_location" == "country"))
+
+head(location_coords)
+
+
+```
+```{r}
+
+
+# aggregate the salaries data by company_location and find the average salary_in_usd for each company_location
+avg_salary_by_location <- salaries %>% 
+  group_by(company_location) %>% 
+  summarize(avg_salary_in_usd = mean(salary_in_usd))
+
+# which countries have the highest average salaries?
+head(avg_salary_by_location)
+arrange(avg_salary_by_location, desc(avg_salary_in_usd))
+
+# merge avg_salary_by_location with location_coords
+salaries_with_locations <- full_join(avg_salary_by_location, location_coords, join_by(company_location))
+
+# check data frame to ensure it looks as expected and does not have any NA values
+head(salaries_with_locations)
+is.na(salaries_with_locations)
+
+# change "name" values for Czech Republic and United States to ensure included when joining with "world" data frame
+
+salaries_with_locations$name[salaries_with_locations$name == "United States"] <- "United States of America"
+
+salaries_with_locations$name[salaries_with_locations$name == "Czech Republic"] <- "Czechia"
+```
+
+```{r}
+# load world map
+world <- ne_countries(returnclass = "sf")
+
+
+# merge world map data with salaries data
+world_salaries <- full_join(salaries_with_locations, world, join_by("name" == "admin"))
+head(world_salaries)
+
+# check the data frame for rows with empty geometries
+filter(world_salaries, st_is_empty(geometry))
+
+```
+Missing data includes:
+* American Samoa - not listed in the "world" data frame, likely because it is a US territory
+* Czech Republic - appears in "world" data frame as Czechia; can go back and rename in the "salaries_with_locations" data frame
+* Malta -???
+* Singapore - ???
+* United States - appears in "world" data frame as United States of America; can go back and rename in "salaries_with_locations" data frame
+
+After renaming the United States and Czech Republic, there are no more rows with empty geomtry...
+```{r}
+# plot map 
+ggplot(data = world_salaries, aes(geometry = geometry)) +
+  geom_sf(aes(fill = avg_salary_in_usd), position = "identity") +
+  scale_fill_viridis_c(option = "viridis") +
+  xlab("Longitude") + ylab("Latitude")
+```
+
+Finally, below I look at company_size compared to experience_level, employment_type, salary_in_usd, and remote_ratio using summary tables and appropriate plots.
+
+```{r}
+# create a summary table with the counts for each company size grouped by experience_level
+company_size_by_experience <- salaries %>% 
+  group_by(company_size, experience_level) %>% 
+  summarize(count = n())
+company_size_by_experience
+
+# create bar plot with counts faceted by company_size
+ggplot(company_size_by_experience, aes(x = experience_level, y = count)) +
+  geom_col() +
+  facet_grid(~company_size)
+```
+```{r}
+# create bar chart using percents calculated with in each year
+ggplot(salaries_by_year,
+       aes(x = bin, y = percent, fill = work_year))+
+  geom_col(color = 'Dim Gray')+
+  facet_wrap(~work_year, ncol = 1) +
+  theme_bw() + 
+  scale_fill_manual(values = c("2020" = "Slate Blue", 
+                               "2021" = "Light Sea Green", 
+                               "2022" = "Lime Green")) +
+  scale_x_discrete(labels = x_labels) +
+  labs(title = 'Data Science Salaries Over Time',
+         x = "Salary \n (in thousands of dollars)",
+         y = "Percent of Employees \n (in given year)") +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5))
+```
+
+Based on this plot, there are clearly varying numbers of employees included in each company size.  It would be more useful to look at the percent instead of the counts.
+```{r}
+salaries_by_company_size <- salaries %>% 
+  # group to find the counts per size
+  group_by(company_size) %>% 
+  mutate(count_by_size = n()) %>% 
+  ungroup() %>% 
+  # group to find counts per experience level within each size
+  group_by(company_size, experience_level, count_by_size) %>% 
+  summarize(count_employees = n()) %>% 
+  # add a column with percents
+  mutate(percent = count_employees/count_by_size *100)
+
+
+salaries_by_company_size
+
+# create bar plot with counts faceted by company_size with percents instead of counts
+ggplot(salaries_by_company_size, 
+       aes(x = experience_level, y = percent, fill = experience_level)) +
+  geom_col(color = 'Dim Gray') +
+  facet_grid(~company_size, 
+             labeller = labeller(company_size = c(S = "Small", M = "Mid", L = "Large"))) +
+  theme_bw() +
+  scale_fill_manual(values = c("EN" = "Light Sea Green", "MI" = "Violet Red", "SE" = "Chocolate", "EX" = "Gold")) +
+  scale_x_discrete(labels = c("EN" = "Entry", "MI" = "Mid", "SE" = "Senior", "EX" = "Exec")) +
+  scale_y_continuous(breaks = c(10, 20, 30, 40, 50)) + 
+  labs(title = "Experience Level by Company Size",
+       x = "Experience Level", 
+       y = "Percent") +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5), axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+```{r}
+# create a summary table with the counts for each company size grouped by employment type
+company_size_by_employment_type <- salaries %>% 
+  group_by(company_size, employment_type) %>% 
+  summarize(count = n())
+company_size_by_employment_type
+
+# create bar plot with counts faceted by company_size
+ggplot(company_size_by_employment_type, aes(x = employment_type, y = count)) +
+  geom_col() +
+  facet_grid(~company_size)
+```
+While it may be helpful to look at the percents instead of the counts for employment_type, there is clearly mostly full time employees, regardless of the size of the company.
+I am interested in looking at the bar plot for employment_type overall...
+```{r}
+ggplot(salaries, aes(x=employment_type)) +
+  geom_bar()
+```
+This looks comparable to each of the company size bar plots in shape.  After looking at other variable comparisons, I may want to examine percents instead of counts.
+
+```{r}
+# create a summary table with the counts for each company size grouped by remote_ratio
+company_size_by_remote_ratio <- salaries %>% 
+  group_by(company_size, remote_ratio) %>% 
+  summarize(count = n())
+company_size_by_remote_ratio
+
+# create bar plot with counts faceted by company_size
+ggplot(company_size_by_remote_ratio, aes(x = remote_ratio, y = count)) +
+  geom_col() +
+  facet_grid(~company_size)
+```
+The distribution of 0%, 50%, and 100% remote workers varies based on company size.  Again, looking at percents may be more useful given the varying total for each company size.
+
+```{r}
+ggplot(salaries, aes(x = salary_in_usd)) +
+  geom_histogram() +
+  facet_grid(~company_size)
+```
+
+All three of the histograms are right skewed with the mode around $100,000. Large companies appear to have more high outliers.
+
+
+
+MY DATA STORY
+My presentation takes the viewer from a broader view to a more detailed view.  My first slide looks at the increase of data science salaries in recent years.  Where are data scientists being paid these amounts we see in recent years? That is answered in the second slide, which compares data salaries based on location, highlighting the countries where data science jobs pay the most, including the US.  Now that we have seen what the "typical" salary may be in the US in 2024, we need to consider what our company is willing to pay based on our priorities.  If we aspire to grow from a small company to a mid-size company (and eventually a large company), how much will we have to pay and who will we need to hire?  This is addressed by looking at a breakdown of company sizes and employee experience.
